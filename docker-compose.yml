@@ -10,5 +10,30 @@ services:
       - postgres_data:/var/lib/postgresql/data
     restart: always
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: db
+    container_name: teamfinder_web
+    command: >
+      sh -c "python manage.py migrate &&
+      python manage.py collectstatic --noinput &&
+      python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+      - static_data:/app/staticfiles
+      - media_data:/app/media
+    depends_on:
+      - db
+    restart: always
+
 volumes:
   postgres_data:
+  static_data:
+  media_data:
