@@ -259,6 +259,17 @@ class UserFlowTests(MediaRootMixin, TestCase):
         user.refresh_from_db()
         self.assertTrue(user.check_password("NewStrongPass123"))
 
+    def test_user_str_returns_full_name(self):
+        user = User.objects.create_user(
+            email="anna@example.com",
+            password="StrongPass123",
+            name="Анна",
+            surname="Иванова",
+            phone="+79990000018",
+        )
+
+        self.assertEqual(str(user), "Анна Иванова")
+
     def test_seed_demo_data_command_creates_users_and_projects(self):
         call_command("seed_demo_data")
 

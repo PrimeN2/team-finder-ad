@@ -1,9 +1,12 @@
-from django.contrib.auth import login, logout, update_session_auth_hash
+from django.contrib.auth import login, logout
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.core.paginator import Paginator
-from django.shortcuts import get_object_or_404, redirect, render
+from django.contrib.auth.views import PasswordChangeView as BasePasswordChangeView
+from django.shortcuts import redirect
+from django.urls import reverse
 from django.views import View
+from django.views.generic import CreateView, DetailView, FormView, ListView, UpdateView
 
+from team_finder.constants import DEFAULT_PAGINATION_PER_PAGE
 from users.forms import (
     LoginForm,
     PasswordChangeForm,
@@ -25,43 +28,34 @@ USER_FILTERS = {
 }
 
 
-def paginate_queryset(request, queryset, per_page=12):
-    paginator = Paginator(queryset, per_page)
-    return paginator.get_page(request.GET.get("page"))
-
-
-class RegisterView(View):
+class RegisterView(CreateView):
     template_name = "users/register.html"
+    form_class = RegistrationForm
 
-    def get(self, request):
-        return render(request, self.template_name, {"form": RegistrationForm()})
-
-    def post(self, request):
-        form = RegistrationForm(request.POST)
-        if form.is_valid():
-            form.save()
-            return redirect("users:login")
-        return render(request, self.template_name, {"form": form})
+    def get_success_url(self):
+        return reverse("users:login")
 
 
-class LoginView(View):
+class LoginView(FormView):
     template_name = "users/login.html"
+    form_class = LoginForm
 
-    def get(self, request):
+    def dispatch(self, request, *args, **kwargs):
         if request.user.is_authenticated:
             return redirect("projects:list")
-        return render(
-            request,
-            self.template_name,
-            {"form": LoginForm(request=request)},
-        )
+        return super().dispatch(request, *args, **kwargs)
 
-    def post(self, request):
-        form = LoginForm(request=request, data=request.POST)
-        if form.is_valid():
-            login(request, form.get_user())
-            return redirect("projects:list")
-        return render(request, self.template_name, {"form": form})
+    def get_form_kwargs(self):
+        kwargs = super().get_form_kwargs()
+        kwargs["request"] = self.request
+        return kwargs
+
+    def form_valid(self, form):
+        login(self.request, form.get_user())
+        return super().form_valid(form)
+
+    def get_success_url(self):
+        return reverse("projects:list")
 
 
 class LogoutView(View):
@@ -70,45 +64,49 @@ class LogoutView(View):
         return redirect("projects:list")
 
 
-class UserDetailView(View):
+class UserDetailView(DetailView):
     template_name = "users/user-details.html"
+    context_object_name = "user"
+    pk_url_kwarg = "user_id"
 
-    def get(self, request, user_id):
-        profile_user = get_object_or_404(
-            User.objects.prefetch_related("owned_projects__participants"),
-            pk=user_id,
+    def get_queryset(self):
+        return User.objects.prefetch_related(
+            "owned_projects__participants",
         )
-        return render(request, self.template_name, {"user": profile_user})
 
 
-class UserListView(View):
+class UserListView(ListView):
     template_name = "users/participants.html"
+    context_object_name = "participants"
+    paginate_by = DEFAULT_PAGINATION_PER_PAGE
 
-    def get(self, request):
+    def get_queryset(self):
         participants = User.objects.all().order_by("-id")
+        if not self.request.user.is_authenticated:
+            return participants
+
+        active_filter = self.request.GET.get("filter")
+        if active_filter not in USER_FILTERS:
+            return participants
+        return self.apply_filter(
+            self.request.user,
+            participants,
+            active_filter,
+        ).distinct()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
         active_filter = None
         query_prefix = ""
-
-        if request.user.is_authenticated:
-            active_filter = request.GET.get("filter")
+        if self.request.user.is_authenticated:
+            active_filter = self.request.GET.get("filter")
             if active_filter in USER_FILTERS:
-                participants = self.apply_filter(
-                    request.user,
-                    participants,
-                    active_filter,
-                )
                 query_prefix = f"filter={active_filter}&"
             else:
                 active_filter = None
-
-        page_obj = paginate_queryset(request, participants.distinct())
-        context = {
-            "participants": participants,
-            "page_obj": page_obj,
-            "active_filter": active_filter,
-            "query_prefix": query_prefix,
-        }
-        return render(request, self.template_name, context)
+        context["active_filter"] = active_filter
+        context["query_prefix"] = query_prefix
+        return context
 
     def apply_filter(self, user, participants, active_filter):
         if active_filter == FILTER_OWNERS_OF_FAVORITE_PROJECTS:
@@ -131,46 +129,29 @@ class UserListView(View):
         return participants
 
 
-class EditProfileView(LoginRequiredMixin, View):
+class EditProfileView(LoginRequiredMixin, UpdateView):
     template_name = "users/edit_profile.html"
+    form_class = ProfileForm
+    model = User
+    context_object_name = "user"
 
-    def get(self, request):
-        form = ProfileForm(instance=request.user)
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "user": request.user},
-        )
+    def get_object(self, queryset=None):
+        return self.request.user
 
-    def post(self, request):
-        form = ProfileForm(request.POST, request.FILES, instance=request.user)
-        if form.is_valid():
-            user = form.save()
-            if not user.avatar:
-                user.ensure_avatar()
-                user.save(update_fields=["avatar"])
-            return redirect("users:detail", user_id=request.user.id)
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "user": request.user},
-        )
+    def form_valid(self, form):
+        response = super().form_valid(form)
+        if not self.object.avatar:
+            self.object.ensure_avatar()
+            self.object.save(update_fields=["avatar"])
+        return response
+
+    def get_success_url(self):
+        return reverse("users:detail", kwargs={"user_id": self.request.user.id})
 
 
-class ChangePasswordView(LoginRequiredMixin, View):
+class ChangePasswordView(LoginRequiredMixin, BasePasswordChangeView):
     template_name = "users/change_password.html"
+    form_class = PasswordChangeForm
 
-    def get(self, request):
-        return render(
-            request,
-            self.template_name,
-            {"form": PasswordChangeForm(user=request.user)},
-        )
-
-    def post(self, request):
-        form = PasswordChangeForm(user=request.user, data=request.POST)
-        if form.is_valid():
-            user = form.save()
-            update_session_auth_hash(request, user)
-            return redirect("users:detail", user_id=request.user.id)
-        return render(request, self.template_name, {"form": form})
+    def get_success_url(self):
+        return reverse("users:detail", kwargs={"user_id": self.request.user.id})

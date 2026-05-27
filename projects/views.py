@@ -1,151 +1,130 @@
-from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
+from http import HTTPStatus
+
+from django.contrib.auth.mixins import LoginRequiredMixin
 from django.http import JsonResponse
-from django.shortcuts import get_object_or_404, redirect, render
-from django.utils.decorators import method_decorator
+from django.shortcuts import get_object_or_404
+from django.urls import reverse
 from django.views import View
+from django.views.generic import CreateView, DetailView, ListView, UpdateView
 
 from projects.forms import ProjectForm
 from projects.models import Project
+from team_finder.constants import DEFAULT_PAGINATION_PER_PAGE
 
 
-def paginate_queryset(request, queryset, per_page=12):
-    paginator = Paginator(queryset, per_page)
-    return paginator.get_page(request.GET.get("page"))
+class ProjectQuerySetMixin:
+    def get_projects_queryset(self):
+        return Project.objects.select_related("owner").prefetch_related(
+            "participants",
+        )
 
 
-class ProjectListView(View):
+class ProjectListView(ProjectQuerySetMixin, ListView):
     template_name = "projects/project_list.html"
+    context_object_name = "projects"
+    paginate_by = DEFAULT_PAGINATION_PER_PAGE
 
-    def get(self, request):
-        projects = Project.objects.select_related(
-            "owner",
-        ).prefetch_related("participants")
-        page_obj = paginate_queryset(request, projects)
-        context = {
-            "projects": projects,
-            "page_obj": page_obj,
-            "query_prefix": "",
-        }
-        return render(request, self.template_name, context)
+    def get_queryset(self):
+        return self.get_projects_queryset()
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["query_prefix"] = ""
+        return context
 
 
-@method_decorator(login_required, name="dispatch")
-class FavoriteProjectsView(View):
+class FavoriteProjectsView(LoginRequiredMixin, ProjectQuerySetMixin, ListView):
     template_name = "projects/favorite_projects.html"
+    context_object_name = "projects"
 
-    def get(self, request):
-        projects = request.user.favorites.select_related(
+    def get_queryset(self):
+        return self.request.user.favorites.select_related(
             "owner",
         ).prefetch_related("participants")
-        return render(request, self.template_name, {"projects": projects})
 
 
-class ProjectDetailView(View):
+class ProjectDetailView(ProjectQuerySetMixin, DetailView):
     template_name = "projects/project-details.html"
+    context_object_name = "project"
+    pk_url_kwarg = "project_id"
 
-    def get(self, request, project_id):
-        project = get_object_or_404(
-            Project.objects.select_related("owner").prefetch_related(
-                "participants",
-            ),
-            pk=project_id,
-        )
-        return render(request, self.template_name, {"project": project})
+    def get_queryset(self):
+        return self.get_projects_queryset()
 
 
-@method_decorator(login_required, name="dispatch")
-class ProjectCreateView(View):
+class ProjectCreateView(LoginRequiredMixin, CreateView):
     template_name = "projects/create-project.html"
+    form_class = ProjectForm
 
-    def get(self, request):
-        form = ProjectForm()
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "is_edit": False},
-        )
+    def form_valid(self, form):
+        form.instance.owner = self.request.user
+        return super().form_valid(form)
 
-    def post(self, request):
-        form = ProjectForm(request.POST)
-        if form.is_valid():
-            project = form.save(commit=False)
-            project.owner = request.user
-            project.save()
-            return redirect("projects:detail", project_id=project.id)
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "is_edit": False},
-        )
+    def get_success_url(self):
+        return reverse("projects:detail", kwargs={"project_id": self.object.pk})
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["is_edit"] = False
+        return context
 
 
-@method_decorator(login_required, name="dispatch")
-class ProjectEditView(View):
+class ProjectEditView(LoginRequiredMixin, UpdateView):
     template_name = "projects/create-project.html"
+    form_class = ProjectForm
+    pk_url_kwarg = "project_id"
+    context_object_name = "project"
 
-    def get_project(self, request, project_id):
-        return get_object_or_404(Project, pk=project_id, owner=request.user)
+    def get_queryset(self):
+        return Project.objects.filter(owner=self.request.user)
 
-    def get(self, request, project_id):
-        project = self.get_project(request, project_id)
-        form = ProjectForm(instance=project)
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "is_edit": True, "project": project},
-        )
+    def get_success_url(self):
+        return reverse("projects:detail", kwargs={"project_id": self.object.pk})
 
-    def post(self, request, project_id):
-        project = self.get_project(request, project_id)
-        form = ProjectForm(request.POST, instance=project)
-        if form.is_valid():
-            project = form.save()
-            return redirect("projects:detail", project_id=project.id)
-        return render(
-            request,
-            self.template_name,
-            {"form": form, "is_edit": True, "project": project},
-        )
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["is_edit"] = True
+        return context
 
 
-@method_decorator(login_required, name="dispatch")
-class ToggleFavoriteView(View):
+class ToggleFavoriteView(LoginRequiredMixin, View):
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
-        if request.user.favorites.filter(pk=project.pk).exists():
+        is_favorited = request.user.favorites.filter(pk=project.pk).exists()
+        if is_favorited:
             request.user.favorites.remove(project)
-            favorited = False
         else:
             request.user.favorites.add(project)
-            favorited = True
-        return JsonResponse({"status": "ok", "favorited": favorited})
+        return JsonResponse({"status": "ok", "favorited": not is_favorited})
 
 
-@method_decorator(login_required, name="dispatch")
-class ToggleParticipateView(View):
+class ToggleParticipateView(LoginRequiredMixin, View):
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
         if (
             project.owner_id == request.user.id
             or project.status != Project.STATUS_OPEN
         ):
-            return JsonResponse({"status": "error"}, status=400)
-        if project.participants.filter(pk=request.user.pk).exists():
+            return JsonResponse(
+                {"status": "error"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
+        is_participant = project.participants.filter(pk=request.user.pk).exists()
+        if is_participant:
             project.participants.remove(request.user)
-            participant = False
         else:
             project.participants.add(request.user)
-            participant = True
-        return JsonResponse({"status": "ok", "participant": participant})
+        return JsonResponse({"status": "ok", "participant": not is_participant})
 
 
-@method_decorator(login_required, name="dispatch")
-class CompleteProjectView(View):
+class CompleteProjectView(LoginRequiredMixin, View):
     def post(self, request, project_id):
         project = get_object_or_404(Project, pk=project_id)
         if project.owner_id != request.user.id or project.status != Project.STATUS_OPEN:
-            return JsonResponse({"status": "error"}, status=400)
+            return JsonResponse(
+                {"status": "error"},
+                status=HTTPStatus.BAD_REQUEST,
+            )
         project.status = Project.STATUS_CLOSED
         project.save(update_fields=["status"])
         return JsonResponse({"status": "ok", "project_status": project.status})

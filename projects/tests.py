@@ -151,3 +151,6 @@ class ProjectFlowTests(MediaRootMixin, TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertIn("/users/login/", response.url)
+
+    def test_project_str_returns_name(self):
+        self.assertEqual(str(self.project), self.project.name)

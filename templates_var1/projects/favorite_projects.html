@@ -20,13 +20,15 @@
         {% include 'includes/project-card.html' %}
         {% empty %}
         <div id="empty-favorite-template">
-            {% include 'includes/empty-project-card.html' with empty_title="Пока нет избранных проектов" empty_message="Добавляйте проекты в избранное, чтобы не потерять их" button_link="/projects/list" button_text="Посмотреть проекты" %}
+            {% url 'projects:list' as projects_list_url %}
+            {% include 'includes/empty-project-card.html' with empty_title="Пока нет избранных проектов" empty_message="Добавляйте проекты в избранное, чтобы не потерять их" button_link=projects_list_url button_text="Посмотреть проекты" %}
         </div>
         {% endfor %}
     </div>
     {% if projects %}
     <div id="empty-favorite-template" style="display: none;">
-        {% include 'includes/empty-project-card.html' with empty_title="Пока нет избранных проектов" empty_message="Добавляйте проекты в избранное, чтобы не потерять их" button_link="/projects/list" button_text="Посмотреть проекты" %}
+        {% url 'projects:list' as projects_list_url %}
+        {% include 'includes/empty-project-card.html' with empty_title="Пока нет избранных проектов" empty_message="Добавляйте проекты в избранное, чтобы не потерять их" button_link=projects_list_url button_text="Посмотреть проекты" %}
     </div>
     {% endif %}
 

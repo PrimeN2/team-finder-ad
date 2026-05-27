@@ -6,8 +6,9 @@ from django.contrib.auth.forms import (
 )
 from django.core.exceptions import ValidationError
 
+from team_finder.forms import GitHubUrlValidationMixin
 from users.models import User
-from users.utils import is_github_url, normalize_phone
+from users.utils import normalize_phone
 
 
 class StyledFormMixin:
@@ -25,12 +26,6 @@ class RegistrationForm(StyledFormMixin, forms.ModelForm):
     class Meta:
         model = User
         fields = ("name", "surname", "email", "phone", "password")
-        labels = {
-            "name": "Имя",
-            "surname": "Фамилия",
-            "email": "Email",
-            "phone": "Телефон",
-        }
         widgets = {
             "name": forms.TextInput(),
             "surname": forms.TextInput(),
@@ -105,18 +100,14 @@ class LoginForm(StyledFormMixin, forms.Form):
         return self.user_cache
 
 
-class ProfileForm(StyledFormMixin, forms.ModelForm):
+class ProfileForm(
+    GitHubUrlValidationMixin,
+    StyledFormMixin,
+    forms.ModelForm,
+):
     class Meta:
         model = User
         fields = ("name", "surname", "avatar", "about", "phone", "github_url")
-        labels = {
-            "name": "Имя",
-            "surname": "Фамилия",
-            "avatar": "Аватар",
-            "about": "О себе",
-            "phone": "Телефон",
-            "github_url": "GitHub",
-        }
         widgets = {
             "about": forms.Textarea(attrs={"rows": 4}),
         }
@@ -144,12 +135,6 @@ class ProfileForm(StyledFormMixin, forms.ModelForm):
                 "Пользователь с таким номером телефона уже существует.",
             )
         return normalized_phone
-
-    def clean_github_url(self):
-        github_url = self.cleaned_data.get("github_url", "")
-        if github_url and not is_github_url(github_url):
-            raise ValidationError("Укажите ссылку на GitHub.")
-        return github_url
 
 
 class PasswordChangeForm(SetPasswordForm):
